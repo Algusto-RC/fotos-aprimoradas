@@ -2,18 +2,25 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 import sys
 import tkinter as tk
-from tkinter import filedialog, messagebox, ttk
+from tkinter import filedialog, messagebox
+
+import customtkinter as ctk
 
 from PIL import Image, ImageFilter, ImageOps, ImageTk
 
 from enhance import enhance, load_photo, save_photo
 from updates import VERSION, download_and_launch, get_asset
 
-INK = "#112b53"
-MUTED = "#4c6380"
-BLUE = "#145bd9"
-WHITE = "#ffffff"
-ICE = "#eef6ff"
+INK = "#142D25"
+MUTED = "#48665A"
+GREEN = "#1DB36F"
+MINT = "#43FFAA"
+WHITE = "#FFFFFF"
+ICE = "#F2FFF9"
+BORDER = "#CAE9DB"
+STAGE = "#17342D"
+ERROR = "#B3220B"
+PEACH = "#FFB5AA"
 ASSETS = Path(getattr(sys, "_MEIPASS", Path(__file__).parent))
 
 
@@ -28,84 +35,112 @@ class App:
         self.busy = False
         self.split = tk.IntVar(value=48)
         self.scale = tk.StringVar(value="2×")
-        self.denoise = tk.BooleanVar(value=True)
+        self.detail = tk.StringVar(value="Equilibrado")
+        self.zoomed = False
+        self.view_center = (0.5, 0.5)
+        self.drag_position = None
+        self.bounds = (0, 1)
         self.status = tk.StringVar(value="Abra uma foto para começar.")
         self.dimensions = tk.StringVar(value="JPG, PNG, WebP, BMP ou TIFF")
         root.title("Fotos Aprimoradas · Lab Gusto")
-        root.geometry("1120x720")
-        root.minsize(860, 620)
-        root.configure(bg=ICE)
+        root.geometry("1120x740")
+        root.minsize(840, 620)
+        root.configure(fg_color=ICE)
         root.protocol("WM_DELETE_WINDOW", self.close)
-        style = ttk.Style(root)
-        style.theme_use("clam")
-        style.configure("TCombobox", padding=7)
-        style.configure("TScale", background=WHITE, troughcolor="#e2efff")
-        style.configure("TCheckbutton", background=WHITE, foreground=INK, font=("Segoe UI", 10))
-        mark = tk.Frame(root, bg=ICE)
-        mark.pack(fill="x", padx=32, pady=(22, 14))
-        self.label(mark, "lab.gusto  /  IMAGEM", 10, BLUE, ICE, True).pack(anchor="w")
-        self.label(mark, "Fotos Aprimoradas", 29, INK, ICE, True).pack(anchor="w")
-        self.label(mark, "Amplie, ajuste a nitidez e compare o resultado.", 11, MUTED, ICE).pack(anchor="w")
-        main = tk.Frame(root, bg=ICE)
-        main.pack(fill="both", expand=True, padx=32)
-        panel = tk.Frame(main, bg=WHITE, padx=20, pady=20, width=260)
-        panel.pack(side="right", fill="y", padx=(18, 0))
+
+        header = ctk.CTkFrame(root, fg_color="transparent")
+        header.pack(fill="x", padx=28, pady=(20, 16))
+        self.label(header, "lab.gusto", 13, MUTED, bold=True).pack(anchor="w")
+        self.label(header, "Fotos Aprimoradas", 36, INK, bold=True).pack(anchor="w")
+        main = ctk.CTkFrame(root, fg_color="transparent")
+        main.pack(fill="both", expand=True, padx=28)
+        main.grid_columnconfigure(0, weight=1)
+        main.grid_rowconfigure(0, weight=1)
+        compare = self.card(main)
+        compare.grid(row=0, column=0, sticky="nsew", padx=(0, 14))
+        panel = self.card(main, width=276)
+        panel.grid(row=0, column=1, sticky="ns")
         panel.pack_propagate(False)
-        compare = tk.Frame(main, bg=WHITE, padx=14, pady=12)
-        compare.pack(side="left", fill="both", expand=True)
-        self.canvas = tk.Canvas(compare, bg="#d8eaff", highlightthickness=0)
-        self.canvas.pack(fill="both", expand=True)
+
+        toolbar = ctk.CTkFrame(compare, fg_color="transparent")
+        toolbar.pack(fill="x", padx=14, pady=(12, 8))
+        self.label(toolbar, "Prévia", 17, INK, bold=True).pack(side="left")
+        self.zoom_button = self.button(toolbar, "Zoom 100%", self.toggle_zoom, width=104, height=30)
+        self.zoom_button.pack(side="right")
+        self.canvas = tk.Canvas(compare, bg=STAGE, highlightthickness=0)
+        self.canvas.pack(fill="both", expand=True, padx=14)
         self.canvas.bind("<Configure>", lambda _: self.draw())
         self.canvas.bind("<Button-1>", self.move_split)
         self.canvas.bind("<B1-Motion>", self.move_split)
-        ttk.Scale(compare, from_=0, to=100, variable=self.split,
-                  command=lambda _: self.draw()).pack(fill="x", pady=(10, 2))
-        self.caption = self.label(compare, "Demonstração · arraste para comparar", 10, MUTED)
-        self.caption.pack(anchor="w")
-        self.label(panel, "Sua foto", 17, INK, bold=True).pack(anchor="w")
-        self.choose = self.button(panel, "Abrir imagem", self.open_photo)
-        self.choose.pack(fill="x", pady=(12, 6))
-        tk.Label(panel, textvariable=self.dimensions, wraplength=218, justify="left",
-                 bg=WHITE, fg=MUTED, font=("Segoe UI", 10)).pack(anchor="w", pady=(0, 20))
-        self.label(panel, "Ampliação", 11, INK, bold=True).pack(anchor="w")
-        self.selector = ttk.Combobox(panel, values=("2×", "3×", "4×"), state="readonly",
-                                     textvariable=self.scale)
-        self.selector.pack(fill="x", pady=(6, 10))
-        self.selector.bind("<<ComboboxSelected>>", self.invalidate)
-        self.noise = ttk.Checkbutton(panel, text="Redução leve de ruído", variable=self.denoise,
-                                     command=self.invalidate)
-        self.noise.pack(anchor="w")
+        self.canvas.bind("<Button-3>", self.start_pan)
+        self.canvas.bind("<B3-Motion>", self.pan)
+        self.slider = ctk.CTkSlider(compare, from_=0, to=100, variable=self.split,
+                                    fg_color=BORDER, progress_color=GREEN,
+                                    button_color=INK, button_hover_color=GREEN,
+                                    command=lambda _: self.draw())
+        self.slider.pack(fill="x", padx=17, pady=(9, 0))
+        self.caption = self.label(compare, "Demonstração · arraste para comparar", 12, MUTED)
+        self.caption.pack(anchor="w", padx=14, pady=(0, 9))
+
+        self.label(panel, "Sua foto", 20, INK, bold=True).pack(anchor="w", padx=17, pady=(15, 8))
+        self.choose = self.button(panel, "Abrir imagem…", self.open_photo)
+        self.choose.pack(fill="x", padx=17)
+        self.file_label = ctk.CTkLabel(panel, textvariable=self.dimensions, anchor="w", justify="left",
+                                      wraplength=240, text_color=MUTED, font=("Segoe UI", 12))
+        self.file_label.pack(fill="x", padx=17, pady=(4, 10))
+        self.label(panel, "Ampliação", 13, INK, bold=True).pack(anchor="w", padx=17)
+        self.selector = ctk.CTkSegmentedButton(
+            panel, values=["1×", "2×", "3×", "4×"], variable=self.scale,
+            command=self.invalidate, selected_color=MINT, selected_hover_color=GREEN,
+            unselected_color="#DCEFE6", unselected_hover_color=BORDER,
+            fg_color="#DCEFE6", text_color=INK, height=35)
+        self.selector.pack(fill="x", padx=17, pady=(3, 10))
+        self.label(panel, "Aprimoramento", 13, INK, bold=True).pack(anchor="w", padx=17)
+        self.profile = ctk.CTkOptionMenu(
+            panel, values=["Suave", "Equilibrado", "Detalhes"], variable=self.detail,
+            command=self.invalidate, fg_color="#DCEFE6", button_color=BORDER,
+            button_hover_color=GREEN, text_color=INK, dropdown_fg_color=ICE,
+            dropdown_text_color=INK, height=35)
+        self.profile.pack(fill="x", padx=17, pady=(3, 13))
         self.run = self.button(panel, "Aprimorar foto", self.process, primary=True)
-        self.run.pack(fill="x", pady=(22, 8))
+        self.run.pack(fill="x", padx=17)
         self.save = self.button(panel, "Salvar resultado", self.export)
-        self.save.pack(fill="x")
-        self.label(panel, "Processamento no seu computador", 9, MUTED).pack(side="bottom", anchor="w")
-        footer = tk.Frame(root, bg=ICE)
-        footer.pack(fill="x", padx=32, pady=14)
-        tk.Label(footer, textvariable=self.status, bg=ICE, fg=MUTED,
-                 font=("Segoe UI", 10), wraplength=620, justify="left").pack(side="left")
-        self.update = self.button(footer, "⟳", self.check_updates)
-        self.update.configure(width=2, font=("Segoe UI Symbol", 16), padx=6, pady=0)
+        self.save.pack(fill="x", padx=17, pady=(7, 0))
+        self.label(panel, "Processamento local", 11, MUTED).pack(side="bottom", anchor="w", padx=17, pady=9)
+
+        footer = ctk.CTkFrame(root, fg_color="transparent")
+        footer.pack(fill="x", padx=28, pady=10)
+        self.status_label = ctk.CTkLabel(footer, textvariable=self.status, text_color=MUTED,
+                                         font=("Segoe UI", 12), wraplength=580, justify="left")
+        self.status_label.pack(side="left")
+        self.update = self.button(footer, "⟳", self.check_updates, width=36, height=34)
         self.update.pack(side="right")
-        self.update.bind("<Enter>", lambda _: self.update_text.pack(side="right", padx=8))
-        self.update.bind("<Leave>", lambda _: self.update_text.pack_forget())
-        self.update_text = self.label(footer, "Verificar atualizações", 10, MUTED, ICE)
-        self.label(footer, f"v{VERSION}", 9, MUTED, ICE).pack(side="right", padx=10)
+        self.update_text = self.label(footer, "", 12, MUTED)
+        self.update_text.pack(side="right", padx=8)
+        self.update.bind("<Enter>", lambda _: self.update_text.configure(text="Verificar atualizações"))
+        self.update.bind("<Leave>", lambda _: self.update_text.configure(text=""))
+        self.label(footer, f"v{VERSION}", 12, MUTED).pack(side="right")
         self.demo = self.read_demo()
         self.refresh()
 
     @staticmethod
-    def label(parent, text, size, color, bg=WHITE, bold=False):
-        return tk.Label(parent, text=text, fg=color, bg=bg,
-                        font=("Segoe UI", size, "bold" if bold else "normal"))
+    def card(parent, **kwargs):
+        return ctk.CTkFrame(parent, fg_color=WHITE, border_color=BORDER,
+                            border_width=1, corner_radius=20, **kwargs)
 
     @staticmethod
-    def button(parent, text, action, primary=False):
-        return tk.Button(parent, text=text, command=action, bg=BLUE if primary else "#e5f0ff",
-                         fg=WHITE if primary else INK, activebackground="#b9d8ff",
-                         relief="flat", font=("Segoe UI", 10, "bold"), padx=12, pady=9,
-                         cursor="hand2", borderwidth=0, highlightthickness=1,
-                         highlightcolor=BLUE, highlightbackground=parent.cget("bg"))
+    def label(parent, text, size, color, bold=False):
+        return ctk.CTkLabel(parent, text=text, text_color=color,
+                            font=("Segoe UI", size, "bold" if bold else "normal"))
+
+    @staticmethod
+    def button(parent, text, action, primary=False, **kwargs):
+        kwargs.setdefault("height", 38)
+        return ctk.CTkButton(parent, text=text, command=action, corner_radius=10,
+                             fg_color=MINT if primary else "#E5F6ED", text_color=INK,
+                             text_color_disabled=MUTED, hover_color=GREEN if primary else BORDER, border_width=0 if primary else 1,
+                             border_color=BORDER,
+                             font=("Segoe UI", 14, "bold"), **kwargs)
 
     @staticmethod
     def read_demo():
@@ -117,56 +152,102 @@ class App:
             return None
 
     def move_split(self, event):
-        self.split.set(round(100 * event.x / max(1, self.canvas.winfo_width())))
+        x, width = self.bounds
+        self.split.set(max(0, min(100, round(100 * (event.x - x) / width))))
+        self.draw()
+
+    def toggle_zoom(self):
+        self.zoomed = not self.zoomed
+        self.zoom_button.configure(text="Ajustar à tela" if self.zoomed else "Zoom 100%")
+        self.update_caption()
+        self.draw()
+
+    def start_pan(self, event):
+        self.drag_position = event.x, event.y
+
+    def pan(self, event):
+        if not self.zoomed or self.drag_position is None:
+            return
+        old_x, old_y = self.drag_position
+        photo = self.result or self.source or self.demo
+        cx, cy = self.view_center
+        self.view_center = (
+            min(1, max(0, cx + (old_x - event.x) / photo.width)),
+            min(1, max(0, cy + (old_y - event.y) / photo.height)),
+        )
+        self.drag_position = event.x, event.y
         self.draw()
 
     def draw(self):
         canvas = self.canvas
         width, height = canvas.winfo_width(), canvas.winfo_height()
-        if min(width, height) < 4:
+        photo = self.result or self.source or self.demo
+        if min(width, height) < 4 or photo is None:
             return
         canvas.delete("all")
-        photo = self.result or self.source or self.demo
-        if photo is None:
-            canvas.create_text(width / 2, height / 2, text="Abra uma foto para visualizar",
-                               fill=INK, font=("Segoe UI", 14))
-            return
-        key = (photo, width, height)
+        key = (photo, width, height, self.zoomed, self.view_center)
         if self.preview_key != key:
-            after = ImageOps.contain(photo, (width, height), Image.Resampling.LANCZOS)
+            if self.zoomed:
+                w, h = min(width, photo.width), min(height, photo.height)
+                cx, cy = self.view_center
+                x = min(photo.width - w, max(0, round(cx * photo.width - w / 2)))
+                y = min(photo.height - h, max(0, round(cy * photo.height - h / 2)))
+                box = (x, y, x + w, y + h)
+                after = photo.crop(box)
+                if self.result is not None:
+                    scale = photo.width / self.source.width
+                    before = self.source.resize((w, h), Image.Resampling.LANCZOS,
+                                                box=tuple(v / scale for v in box))
+                else:
+                    before = after
+            else:
+                after = ImageOps.contain(photo, (width, height), Image.Resampling.LANCZOS)
+                before = self.source.resize(after.size, Image.Resampling.LANCZOS) if self.result is not None else after
             if self.source is None:
                 before = after.filter(ImageFilter.GaussianBlur(5))
-            else:
-                before = self.source.resize(after.size, Image.Resampling.LANCZOS)
             self.layers = after, before
             self.preview_key = key
         after, before = self.layers
-        after = after.copy()
         x, y = (width - after.width) // 2, (height - after.height) // 2
-        cut = max(0, min(after.width, int(width * self.split.get() / 100) - x))
-        if cut:
+        self.bounds = x, after.width
+        cut = round(after.width * self.split.get() / 100)
+        comparing = self.result is not None or self.source is None
+        if comparing and cut:
+            after = after.copy()
             after.paste(before.crop((0, 0, cut, after.height)), (0, 0))
         self.preview = ImageTk.PhotoImage(after)
         canvas.create_image(x, y, anchor="nw", image=self.preview)
-        if self.result is not None or self.source is None:
+        if comparing:
             bar = x + cut
-            canvas.create_line(bar, y, bar, y + after.height, width=3, fill=WHITE)
             middle = height / 2
-            canvas.create_oval(bar - 15, middle - 15, bar + 15, middle + 15,
-                               fill=WHITE, outline="#b9d8ff", width=1)
-            canvas.create_text(bar, middle, text="‹ ›", fill=BLUE, font=("Segoe UI", 13, "bold"))
+            canvas.create_line(bar, y, bar, y + after.height, width=2, fill=MINT)
+            canvas.create_oval(bar - 13, middle - 13, bar + 13, middle + 13, fill=MINT, outline=INK)
+            canvas.create_text(bar, middle, text="‹ ›", fill=INK, font=("Segoe UI", 12, "bold"))
+
+    def update_caption(self):
+        if self.source is None:
+            text = "Demonstração · arraste para comparar"
+        elif self.result is None:
+            text = "Foto original"
+        else:
+            text = "Original à esquerda · aprimorada à direita"
+        if self.zoomed:
+            text += "  |  Mova com o botão direito"
+        self.caption.configure(text=text)
 
     def refresh(self):
         self.choose.configure(state="disabled" if self.busy else "normal")
         self.run.configure(state="normal" if self.source is not None and not self.busy else "disabled")
         self.save.configure(state="normal" if self.result is not None and not self.busy else "disabled")
         self.update.configure(state="disabled" if self.busy else "normal")
-        self.selector.configure(state="disabled" if self.busy else "readonly")
-        self.noise.configure(state="disabled" if self.busy else "normal")
+        self.selector.configure(state="disabled" if self.busy else "normal")
+        self.profile.configure(state="disabled" if self.busy else "normal")
+        self.slider.configure(state="normal" if self.result is not None or self.source is None else "disabled")
         self.draw()
 
     def work(self, status, task, done):
         self.busy = True
+        self.status_label.configure(text_color=MUTED, fg_color="transparent")
         self.status.set(status)
         self.refresh()
         future = self.pool.submit(task)
@@ -179,6 +260,7 @@ class App:
             try:
                 result = future.result()
             except Exception as error:
+                self.status_label.configure(text_color=ERROR, fg_color=PEACH)
                 self.status.set("A operação não foi concluída.")
                 messagebox.showerror("Fotos Aprimoradas", str(error), parent=self.root)
             else:
@@ -195,23 +277,25 @@ class App:
 
     def loaded(self, path, photo):
         self.path, self.source = Path(path), photo
+        self.view_center = (0.5, 0.5)
+        self.split.set(50)
         self.dimensions.set(f"{self.path.name}\n{photo.width} × {photo.height} px")
         self.invalidate()
 
     def invalidate(self, _=None):
         if self.source is not None:
             self.result = None
-            self.caption.configure(text="Foto original")
+            self.update_caption()
             self.status.set("Escolha a escala e clique em Aprimorar foto.")
             self.refresh()
 
     def process(self):
-        photo, scale, denoise = self.source, int(self.scale.get()[0]), self.denoise.get()
-        self.work("Aprimorando foto…", lambda: enhance(photo, scale, denoise), self.processed)
+        photo, scale, profile = self.source, int(self.scale.get()[0]), self.detail.get()
+        self.work("Aprimorando foto…", lambda: enhance(photo, scale, profile), self.processed)
 
     def processed(self, photo):
         self.result = photo
-        self.caption.configure(text="Original à esquerda · aprimorada à direita")
+        self.update_caption()
         self.status.set(f"Resultado pronto · {photo.width} × {photo.height} px")
 
     def export(self):
@@ -249,6 +333,7 @@ class App:
 
 
 if __name__ == "__main__":
-    window = tk.Tk()
+    ctk.set_appearance_mode("light")
+    window = ctk.CTk()
     App(window)
     window.mainloop()

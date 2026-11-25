@@ -6,7 +6,7 @@ import re
 import tempfile
 from urllib.request import Request, urlopen
 
-VERSION = "1.0.0"
+VERSION = "1.1.0"
 REPOSITORY = "Algusto-RC/fotos-aprimoradas"
 INSTALLER = "labGusto-Fotos-Aprimoradas-Setup.exe"
 

@@ -16,20 +16,32 @@ def load_photo(path):
         return photo.convert("RGB")
 
 
-def enhance(photo, scale, denoise=True):
+def enhance(photo, scale, profile="Equilibrado"):
+    if scale not in (1, 2, 3, 4):
+        raise ValueError("Selecione uma ampliação entre 1× e 4×.")
     width, height = photo.width * scale, photo.height * scale
     if width * height > MAX_PIXELS or max(width, height) > 16384:
         raise ValueError("A saída excede 40 megapixels ou 16.384 px por lado. Tente uma escala menor.")
-    colors = photo.convert("RGB")
-    if denoise:
-        colors = Image.blend(colors, colors.filter(ImageFilter.MedianFilter(3)), .25)
+
+    noise, edge_strength, texture_strength, threshold = {
+        "Suave": (0.45, 75, 30, 5),
+        "Equilibrado": (0.20, 100, 43, 4),
+        "Detalhes": (0.0, 125, 46, 3),
+    }[profile]
+    luma, cb, cr = photo.convert("RGB").convert("YCbCr").split()
+    if noise:
+        luma = Image.blend(luma, luma.filter(ImageFilter.MedianFilter(3)), noise)
+
+    # Work at source resolution first so edge correction survives enlargement.
+    luma = luma.filter(ImageFilter.UnsharpMask(radius=1.1, percent=edge_strength, threshold=threshold))
+    luma = luma.filter(ImageFilter.UnsharpMask(radius=3.2, percent=texture_strength, threshold=threshold + 2))
+    corrected = Image.merge("YCbCr", (luma, cb, cr)).convert("RGB")
     if photo.mode == "RGBA":
-        colors.putalpha(photo.getchannel("A"))
-    enlarged = colors.resize((width, height), Image.Resampling.LANCZOS)
-    sharp = enlarged.convert("RGB").filter(ImageFilter.UnsharpMask(radius=1.5, percent=105, threshold=3))
-    if enlarged.mode == "RGBA":
-        sharp.putalpha(enlarged.getchannel("A"))
-    return sharp
+        corrected.putalpha(photo.getchannel("A"))
+    result = corrected.resize((width, height), Image.Resampling.LANCZOS)
+    if photo.info.get("icc_profile"):
+        result.info["icc_profile"] = photo.info["icc_profile"]
+    return result
 
 
 def save_photo(photo, path):
