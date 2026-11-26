@@ -13,8 +13,47 @@ concurrency:
   group: windows-release
   cancel-in-progress: false
 
+env:
+  REALESRGAN_RELEASE: https://github.com/xinntao/Real-ESRGAN/releases/download/v0.2.5.0
+
 jobs:
+  inference:
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Testar super-resolução com Vulkan por software
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y mesa-vulkan-drivers
+          python -m pip install -r requirements.txt
+          curl --fail --location --retry 3 "$REALESRGAN_RELEASE/realesrgan-ncnn-vulkan-20220424-ubuntu.zip" -o ai.zip
+          echo "e5aa6eb131234b87c0c51f82b89390f5e3e642b7b70f2b9bbe95b6a285a40c96  ai.zip" | sha256sum --check
+          unzip -q ai.zip realesrgan-ncnn-vulkan 'models/realesrgan-x4plus.*' -d ai_engine
+          chmod +x ai_engine/realesrgan-ncnn-vulkan
+          export VK_ICD_FILENAMES="$(find /usr/share/vulkan/icd.d -name '*lvp*' -print -quit)"
+          timeout 120 python - <<'PYTEST'
+          from pathlib import Path
+          from PIL import ImageChops
+          from enhance import load_photo
+          from super_resolution import upscale_with_ai
+
+          source = load_photo("demo.jpg").resize((48, 32)).convert("RGBA")
+          source.putalpha(170)
+          engine = Path("ai_engine").resolve()
+          output = upscale_with_ai(source, 4, engine)
+          assert output.size == (192, 128)
+          assert output.getchannel("A").getextrema() == (170, 170)
+          assert ImageChops.difference(source.resize(output.size).convert("RGB"), output.convert("RGB")).getbbox()
+          assert upscale_with_ai(source, 2, engine).size == (96, 64)
+          PYTEST
+
   release:
+    needs: inference
     runs-on: windows-2022
     steps:
       - uses: actions/checkout@v4
@@ -23,8 +62,20 @@ jobs:
           python-version: '3.12'
       - name: Instalar dependências
         run: python -m pip install -r requirements.txt pyinstaller==6.16.0
+      - name: Preparar motor de IA local
+        shell: pwsh
+        run: |
+          curl.exe --fail --location --retry 3 "$env:REALESRGAN_RELEASE/realesrgan-ncnn-vulkan-20220424-windows.zip" -o ai.zip
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          if ((Get-FileHash ai.zip -Algorithm SHA256).Hash -ne 'abc02804e17982a3be33675e4d471e91ea374e65b70167abc09e31acb412802d') {
+            throw "SHA-256 inesperado no pacote Real-ESRGAN."
+          }
+          Expand-Archive ai.zip -DestinationPath ai-source
+          New-Item -Type Directory ai_engine/models -Force | Out-Null
+          Copy-Item ai-source/realesrgan-ncnn-vulkan.exe, ai-source/vcomp140.dll, LICENSE-*.txt ai_engine/
+          Copy-Item ai-source/models/realesrgan-x4plus.* ai_engine/models/
       - name: Empacotar aplicativo
-        run: python -m PyInstaller --noconfirm --windowed --collect-data customtkinter --name FotosAprimoradas --add-data 'demo.jpg:.' app.py
+        run: python -m PyInstaller --noconfirm --windowed --collect-data customtkinter --name FotosAprimoradas --icon fotos.ico --add-data 'fotos.ico:.' --add-data 'demo.jpg:.' --add-data 'ai_engine:ai_engine' app.py
       - name: Compilar e testar instalação silenciosa
         shell: pwsh
         run: |
@@ -39,6 +90,10 @@ jobs:
           $install = Start-Process $setup -ArgumentList '/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART','/TASKS=' -Wait -PassThru
           if ($install.ExitCode -ne 0) { throw "Falha de instalação: $($install.ExitCode)" }
           $app = "$env:ProgramFiles\labPontoGusto\Fotos Aprimoradas\FotosAprimoradas.exe"
+          $engine = Join-Path (Split-Path $app) '_internal\ai_engine'
+          foreach ($asset in @('realesrgan-ncnn-vulkan.exe', 'vcomp140.dll', 'models\realesrgan-x4plus.param', 'models\realesrgan-x4plus.bin')) {
+            if (!(Test-Path (Join-Path $engine $asset))) { throw "Arquivo de IA ausente: $asset" }
+          }
           $process = Start-Process $app -PassThru
           Start-Sleep -Seconds 8
           if ($process.HasExited) { throw "O aplicativo encerrou durante a inicialização." }

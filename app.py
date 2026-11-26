@@ -9,6 +9,7 @@ import customtkinter as ctk
 from PIL import Image, ImageFilter, ImageOps, ImageTk
 
 from enhance import enhance, load_photo, save_photo
+from super_resolution import AI_PROFILE, upscale_with_ai
 from updates import VERSION, download_and_launch, get_asset
 
 INK = "#142D25"
@@ -35,7 +36,7 @@ class App:
         self.busy = False
         self.split = tk.IntVar(value=48)
         self.scale = tk.StringVar(value="2×")
-        self.detail = tk.StringVar(value="Equilibrado")
+        self.detail = tk.StringVar(value=AI_PROFILE)
         self.zoomed = False
         self.view_center = (0.5, 0.5)
         self.drag_position = None
@@ -97,7 +98,7 @@ class App:
         self.selector.pack(fill="x", padx=17, pady=(3, 10))
         self.label(panel, "Aprimoramento", 13, INK, bold=True).pack(anchor="w", padx=17)
         self.profile = ctk.CTkOptionMenu(
-            panel, values=["Suave", "Equilibrado", "Detalhes"], variable=self.detail,
+            panel, values=[AI_PROFILE, "Suave", "Equilibrado", "Detalhes"], variable=self.detail,
             command=self.invalidate, fg_color="#DCEFE6", button_color=BORDER,
             button_hover_color=GREEN, text_color=INK, dropdown_fg_color=ICE,
             dropdown_text_color=INK, height=35)
@@ -291,7 +292,11 @@ class App:
 
     def process(self):
         photo, scale, profile = self.source, int(self.scale.get()[0]), self.detail.get()
-        self.work("Aprimorando foto…", lambda: enhance(photo, scale, profile), self.processed)
+        if profile == AI_PROFILE:
+            self.work("Aprimorando com IA local…", lambda: upscale_with_ai(photo, scale, ASSETS / "ai_engine"),
+                      self.processed)
+        else:
+            self.work("Aprimorando foto…", lambda: enhance(photo, scale, profile), self.processed)
 
     def processed(self, photo):
         self.result = photo
@@ -335,5 +340,9 @@ class App:
 if __name__ == "__main__":
     ctk.set_appearance_mode("light")
     window = ctk.CTk()
+    if sys.platform == "win32":
+        icon = ASSETS / "fotos.ico"
+        if icon.is_file():
+            window.iconbitmap(default=str(icon))
     App(window)
     window.mainloop()

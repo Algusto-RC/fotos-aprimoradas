@@ -16,13 +16,18 @@ def load_photo(path):
         return photo.convert("RGB")
 
 
-def enhance(photo, scale, profile="Equilibrado"):
+def output_size(photo, scale):
     if scale not in (1, 2, 3, 4):
         raise ValueError("Selecione uma ampliação entre 1× e 4×.")
     width, height = photo.width * scale, photo.height * scale
     if width * height > MAX_PIXELS or max(width, height) > 16384:
         raise ValueError("A saída excede 40 megapixels ou 16.384 px por lado. Tente uma escala menor.")
 
+    return width, height
+
+
+def enhance(photo, scale, profile="Equilibrado"):
+    size = output_size(photo, scale)
     noise, edge_strength, texture_strength, threshold = {
         "Suave": (0.45, 75, 30, 5),
         "Equilibrado": (0.20, 100, 43, 4),
@@ -38,7 +43,7 @@ def enhance(photo, scale, profile="Equilibrado"):
     corrected = Image.merge("YCbCr", (luma, cb, cr)).convert("RGB")
     if photo.mode == "RGBA":
         corrected.putalpha(photo.getchannel("A"))
-    result = corrected.resize((width, height), Image.Resampling.LANCZOS)
+    result = corrected.resize(size, Image.Resampling.LANCZOS)
     if photo.info.get("icc_profile"):
         result.info["icc_profile"] = photo.info["icc_profile"]
     return result

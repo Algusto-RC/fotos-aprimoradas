@@ -1,7 +1,8 @@
 ﻿[Setup]
 AppId=labPontoGusto.FotosAprimoradas
 AppName=Fotos Aprimoradas
-AppVersion=1.1.0
+AppVersion=1.2.0
+SetupIconFile=fotos.ico
 AppPublisher=Lab Gusto
 DefaultDirName={autopf}\labPontoGusto\Fotos Aprimoradas
 DefaultGroupName=lab.gusto
